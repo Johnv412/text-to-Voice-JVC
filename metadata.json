@@ -1,0 +1,5 @@
+{
+  "name": "VoxGen AI",
+  "description": "Transform text into high-quality audio with custom voices and accents using Gemini AI.",
+  "requestFramePermissions": ["microphone"]
+}
