@@ -5,6 +5,7 @@ import fs from 'fs';
 import Database from 'better-sqlite3';
 import multer from 'multer';
 import dotenv from 'dotenv';
+import { GoogleGenAI, Modality } from "@google/genai";
 
 dotenv.config();
 
@@ -37,6 +38,41 @@ const upload = multer({ storage });
 
 app.use(express.json());
 app.use('/uploads', express.static('uploads'));
+
+// Helper for WAV Header
+function addWavHeader(pcmData: Buffer, sampleRate: number): Buffer {
+  const dataSize = pcmData.length;
+  const header = Buffer.alloc(44);
+
+  // RIFF identifier
+  header.write('RIFF', 0);
+  // RIFF chunk length
+  header.writeUInt32LE(36 + dataSize, 4);
+  // RIFF type
+  header.write('WAVE', 8);
+  // format chunk identifier
+  header.write('fmt ', 12);
+  // format chunk length
+  header.writeUInt32LE(16, 16);
+  // sample format (PCM = 1)
+  header.writeUInt16LE(1, 20);
+  // channel count (Mono = 1)
+  header.writeUInt16LE(1, 22);
+  // sample rate
+  header.writeUInt32LE(sampleRate, 24);
+  // byte rate (sample rate * block align)
+  header.writeUInt32LE(sampleRate * 2, 28);
+  // block align (channel count * bytes per sample)
+  header.writeUInt16LE(2, 32);
+  // bits per sample (16-bit)
+  header.writeUInt16LE(16, 34);
+  // data chunk identifier
+  header.write('data', 36);
+  // data chunk length
+  header.writeUInt32LE(dataSize, 40);
+
+  return Buffer.concat([header, pcmData]);
+}
 
 // API Routes
 app.get('/api/cloned-voices', (req, res) => {
@@ -78,7 +114,11 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static('dist'));
+    const distPath = path.join(process.cwd(), 'dist');
+    app.use(express.static(distPath));
+    app.get('*', (req, res) => {
+      res.sendFile(path.join(distPath, 'index.html'));
+    });
   }
 
   app.listen(PORT, '0.0.0.0', () => {

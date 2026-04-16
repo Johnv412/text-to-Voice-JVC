@@ -29,7 +29,7 @@ export async function generateSpeech({ text, voice, accent, pitch, rate }: TTSOp
     : text;
 
   const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash-preview-tts",
+    model: "gemini-3.1-flash-tts-preview",
     contents: [{ parts: [{ text: prompt }] }],
     config: {
       responseModalities: [Modality.AUDIO],
@@ -66,6 +66,115 @@ export async function sampleVoice(voice: VoiceName): Promise<string> {
     text: `Hello! I am the ${voice} voice. How can I help you today?`,
     voice
   });
+}
+
+export async function generatePodcast(
+  script: string, 
+  speakerMap: Record<string, VoiceName>, 
+  accentMap: Record<string, string>,
+  onProgress?: (current: number, total: number) => void
+): Promise<string> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("GEMINI_API_KEY is not set");
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
+  
+  // Parse script into segments
+  const lines = script.split('\n').filter((l: string) => l.trim().length > 0);
+  const segments = lines.map((line: string) => {
+    const match = line.match(/^([^:]+):\s*(.*)$/);
+    if (match) {
+      return { speaker: match[1].trim(), text: match[2].trim() };
+    }
+    return { speaker: 'Unknown', text: line.trim() };
+  });
+
+  const pcmChunks: Uint8Array[] = [];
+  const silenceBuffer = new Uint8Array(24000 * 2 * 0.5); // 0.5s silence at 24kHz 16-bit mono
+
+  const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+  for (let i = 0; i < segments.length; i++) {
+    if (onProgress) onProgress(i + 1, segments.length);
+    const segment = segments[i];
+    const voiceName = speakerMap[segment.speaker] || 'Kore';
+    const accent = accentMap?.[segment.speaker] || '';
+    
+    let instructions = [];
+    if (accent) instructions.push(`a ${accent} accent`);
+    const prompt = instructions.length > 0
+      ? `Say with ${instructions.join(', ')}: ${segment.text}`
+      : segment.text;
+
+    let success = false;
+    let retries = 0;
+    const maxRetries = 3;
+
+    while (!success && retries <= maxRetries) {
+      try {
+        const response = await ai.models.generateContent({
+          model: "gemini-3.1-flash-tts-preview",
+          contents: [{ parts: [{ text: prompt }] }],
+          config: {
+            responseModalities: [Modality.AUDIO],
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: { voiceName },
+              },
+            },
+          },
+        });
+
+        const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+        if (base64Audio) {
+          const pcmData = Uint8Array.from(atob(base64Audio), c => c.charCodeAt(0));
+          pcmChunks.push(pcmData);
+          pcmChunks.push(silenceBuffer);
+        }
+        success = true;
+      } catch (error: any) {
+        if (error.message?.includes('429') || error.message?.includes('quota')) {
+          retries++;
+          if (retries > maxRetries) throw error;
+          const waitTime = Math.pow(2, retries) * 1000 + Math.random() * 1000;
+          console.warn(`Rate limit hit. Retrying in ${Math.round(waitTime)}ms... (Attempt ${retries}/${maxRetries})`);
+          await delay(waitTime);
+        } else {
+          throw error;
+        }
+      }
+    }
+
+    // Small delay between segments to be kind to the API
+    if (i < segments.length - 1) {
+      await delay(500);
+    }
+  }
+
+  if (pcmChunks.length === 0) {
+    throw new Error("No audio generated");
+  }
+
+  // Calculate total size
+  const totalSize = pcmChunks.reduce((acc, chunk) => acc + chunk.length, 0);
+  const finalPcm = new Uint8Array(totalSize);
+  let offset = 0;
+  for (const chunk of pcmChunks) {
+    finalPcm.set(chunk, offset);
+    offset += chunk.length;
+  }
+
+  const wavData = addWavHeader(finalPcm, 24000);
+  
+  // Convert to base64
+  let binary = '';
+  const len = wavData.byteLength;
+  for (let i = 0; i < len; i++) {
+    binary += String.fromCharCode(wavData[i]);
+  }
+  return btoa(binary);
 }
 
 function addWavHeader(pcmData: Uint8Array, sampleRate: number): Uint8Array {

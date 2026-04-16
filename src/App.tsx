@@ -19,10 +19,12 @@ import {
   Trash2,
   Info,
   Sparkles,
-  Headphones
+  Headphones,
+  Radio,
+  Users
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { generateSpeech, VoiceName, sampleVoice } from './services/geminiService';
+import { generateSpeech, VoiceName, sampleVoice, generatePodcast } from './services/geminiService';
 
 interface Voice {
   id: VoiceName;
@@ -70,6 +72,70 @@ export default function App() {
   const [cloneName, setCloneName] = useState('');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [samplingVoice, setSamplingVoice] = useState<VoiceName | null>(null);
+
+  // Podcast State
+  const [podcastScript, setPodcastScript] = useState('');
+  const [speakerMap, setSpeakerMap] = useState<Record<string, VoiceName>>({});
+  const [accentMap, setAccentMap] = useState<Record<string, string>>({});
+  const [isGeneratingPodcast, setIsGeneratingPodcast] = useState(false);
+  const [podcastAudioUrl, setPodcastAudioUrl] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'studio' | 'podcast'>('studio');
+
+  // Parse speakers from script
+  useEffect(() => {
+    const lines = podcastScript.split('\n').filter(l => l.trim().length > 0);
+    const speakers = new Set<string>();
+    lines.forEach(line => {
+      const match = line.match(/^([^:]+):/);
+      if (match) speakers.add(match[1].trim());
+    });
+
+    const newSpeakerMap = { ...speakerMap };
+    const newAccentMap = { ...accentMap };
+    let changed = false;
+    speakers.forEach(speaker => {
+      if (!newSpeakerMap[speaker]) {
+        newSpeakerMap[speaker] = 'Kore';
+        changed = true;
+      }
+      if (newAccentMap[speaker] === undefined) {
+        newAccentMap[speaker] = '';
+        changed = true;
+      }
+    });
+    if (changed) {
+      setSpeakerMap(newSpeakerMap);
+      setAccentMap(newAccentMap);
+    }
+  }, [podcastScript]);
+
+  const [podcastProgress, setPodcastProgress] = useState({ current: 0, total: 0 });
+
+  const handleGeneratePodcast = async () => {
+    if (!podcastScript.trim()) return;
+    setIsGeneratingPodcast(true);
+    setPodcastAudioUrl(null);
+    
+    const lines = podcastScript.split('\n').filter(l => l.trim().length > 0);
+    setPodcastProgress({ current: 0, total: lines.length });
+
+    try {
+      const base64Audio = await generatePodcast(
+        podcastScript, 
+        speakerMap, 
+        accentMap,
+        (current, total) => setPodcastProgress({ current, total })
+      );
+      const blob = await fetch(`data:audio/wav;base64,${base64Audio}`).then(r => r.blob());
+      const url = URL.createObjectURL(blob);
+      setPodcastAudioUrl(url);
+    } catch (err: any) {
+      console.error(err);
+      alert(`Failed to generate podcast: ${err.message}`);
+    } finally {
+      setIsGeneratingPodcast(false);
+    }
+  };
 
   // Recording State
   const [isRecording, setIsRecording] = useState(false);
@@ -249,70 +315,227 @@ export default function App() {
           >
             The ultimate studio for text-to-speech generation and voice management.
           </motion.p>
+
+          <div className="mt-8 flex justify-center gap-4">
+            <button
+              onClick={() => setActiveTab('studio')}
+              className={`px-6 py-2 rounded-full font-bold transition-all flex items-center gap-2 ${
+                activeTab === 'studio' 
+                  ? 'bg-slate-900 text-white shadow-lg' 
+                  : 'bg-white text-slate-500 hover:bg-slate-50 border border-slate-200'
+              }`}
+            >
+              <Volume2 className="w-4 h-4" />
+              Studio
+            </button>
+            <button
+              onClick={() => setActiveTab('podcast')}
+              className={`px-6 py-2 rounded-full font-bold transition-all flex items-center gap-2 ${
+                activeTab === 'podcast' 
+                  ? 'bg-slate-900 text-white shadow-lg' 
+                  : 'bg-white text-slate-500 hover:bg-slate-50 border border-slate-200'
+              }`}
+            >
+              <Radio className="w-4 h-4" />
+              Podcast Studio
+            </button>
+          </div>
         </header>
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
           {/* Left Column: Generation */}
           <div className="lg:col-span-8 space-y-8">
-            <motion.div 
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="glass-card p-8"
-            >
-              <div className="flex items-center justify-between mb-6">
-                <div className="flex items-center gap-3">
-                  <div className="p-2 bg-slate-100 rounded-lg">
-                    <Volume2 className="w-5 h-5 text-slate-600" />
+            {activeTab === 'studio' ? (
+              <motion.div 
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="glass-card p-8"
+              >
+                <div className="flex items-center justify-between mb-6">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 bg-slate-100 rounded-lg">
+                      <Volume2 className="w-5 h-5 text-slate-600" />
+                    </div>
+                    <h2 className="text-lg font-bold text-slate-800">Studio Workspace</h2>
                   </div>
-                  <h2 className="text-lg font-bold text-slate-800">Studio Workspace</h2>
+                  <div className="flex items-center gap-2 px-3 py-1 bg-slate-50 rounded-full border border-slate-100">
+                    <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                    <span className="text-[10px] font-mono text-slate-500 uppercase tracking-widest">Live Engine</span>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2 px-3 py-1 bg-slate-50 rounded-full border border-slate-100">
-                  <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                  <span className="text-[10px] font-mono text-slate-500 uppercase tracking-widest">Live Engine</span>
-                </div>
-              </div>
 
-              <textarea
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-                placeholder="Enter your script here... Experience the power of AI speech."
-                className="input-field h-80 text-xl leading-relaxed placeholder:text-slate-300"
-              />
-              
-              <div className="mt-8 flex items-center gap-4">
-                <button
-                  onClick={handleGenerate}
-                  disabled={isLoading || !text.trim()}
-                  className="btn-primary flex-1 py-4 text-lg flex items-center justify-center gap-3 shadow-xl shadow-slate-900/10"
-                >
-                  {isLoading ? (
-                    <>
-                      <Loader2 className="w-6 h-6 animate-spin" />
-                      Synthesizing...
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles className="w-6 h-6" />
-                      Generate Masterpiece
-                    </>
-                  )}
-                </button>
-                {audioUrl && (
+                <textarea
+                  value={text}
+                  onChange={(e) => setText(e.target.value)}
+                  placeholder="Enter your script here... Experience the power of AI speech."
+                  className="input-field h-80 text-xl leading-relaxed placeholder:text-slate-300"
+                />
+                
+                <div className="mt-8 flex items-center gap-4">
                   <button
-                    onClick={handleDownload}
-                    className="p-4 rounded-2xl bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 transition-all shadow-sm flex items-center gap-2"
-                    title="Download Last Generation"
+                    onClick={handleGenerate}
+                    disabled={isLoading || !text.trim()}
+                    className="btn-primary flex-1 py-4 text-lg flex items-center justify-center gap-3 shadow-xl shadow-slate-900/10"
                   >
-                    <Download className="w-6 h-6" />
-                    <span className="hidden sm:inline font-bold">Download</span>
+                    {isLoading ? (
+                      <>
+                        <Loader2 className="w-6 h-6 animate-spin" />
+                        Synthesizing...
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="w-6 h-6" />
+                        Generate Masterpiece
+                      </>
+                    )}
                   </button>
-                )}
-              </div>
-            </motion.div>
+                  {audioUrl && (
+                    <button
+                      onClick={handleDownload}
+                      className="p-4 rounded-2xl bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 transition-all shadow-sm flex items-center gap-2"
+                      title="Download Last Generation"
+                    >
+                      <Download className="w-6 h-6" />
+                      <span className="hidden sm:inline font-bold">Download</span>
+                    </button>
+                  )}
+                </div>
+              </motion.div>
+            ) : (
+              <motion.div 
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="glass-card p-8"
+              >
+                <div className="flex items-center justify-between mb-6">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 bg-indigo-100 rounded-lg">
+                      <Radio className="w-5 h-5 text-indigo-600" />
+                    </div>
+                    <h2 className="text-lg font-bold text-slate-800">Podcast Studio</h2>
+                  </div>
+                </div>
 
-            {/* Audio Player */}
+                <div className="space-y-6">
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Podcast Script</label>
+                    <textarea
+                      value={podcastScript}
+                      onChange={(e) => setPodcastScript(e.target.value)}
+                      placeholder="Host: Welcome to the show!&#10;Guest: Thanks for having me."
+                      className="input-field h-64 text-lg leading-relaxed font-mono"
+                    />
+                    <p className="text-[10px] text-slate-400">Format: "SpeakerName: Speech text" on each line.</p>
+                  </div>
+
+                  {Object.keys(speakerMap).length > 0 && (
+                    <div className="space-y-4">
+                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
+                        <Users className="w-4 h-4" />
+                        Cast Assignments
+                      </label>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        {Object.keys(speakerMap).map(speaker => (
+                          <div key={speaker} className="p-4 rounded-2xl bg-slate-50 border border-slate-100 flex flex-col gap-3">
+                            <span className="font-bold text-slate-700 text-sm">{speaker}</span>
+                            <div className="space-y-2">
+                              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">Voice</label>
+                              <select
+                                value={speakerMap[speaker]}
+                                onChange={(e) => setSpeakerMap({ ...speakerMap, [speaker]: e.target.value as VoiceName })}
+                                className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-sm outline-none focus:ring-2 focus:ring-indigo-500/20"
+                              >
+                                {VOICES.map(v => (
+                                  <option key={v.id} value={v.id}>{v.name} ({v.gender})</option>
+                                ))}
+                              </select>
+                            </div>
+                            <div className="space-y-2">
+                              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">Accent</label>
+                              <select
+                                value={accentMap[speaker]}
+                                onChange={(e) => setAccentMap({ ...accentMap, [speaker]: e.target.value })}
+                                className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-sm outline-none focus:ring-2 focus:ring-indigo-500/20"
+                              >
+                                {ACCENTS.map(a => (
+                                  <option key={a.id} value={a.value}>{a.label}</option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <button
+                    onClick={handleGeneratePodcast}
+                    disabled={isGeneratingPodcast || !podcastScript.trim()}
+                    className="w-full py-4 rounded-2xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-900/10 flex items-center justify-center gap-3 disabled:opacity-50"
+                  >
+                    {isGeneratingPodcast ? (
+                      <div className="flex flex-col items-center gap-2">
+                        <div className="flex items-center gap-3">
+                          <Loader2 className="w-6 h-6 animate-spin" />
+                          <span>Stitching Podcast...</span>
+                        </div>
+                        <div className="text-[10px] text-indigo-200 font-mono uppercase tracking-widest">
+                          Processing line {podcastProgress.current} of {podcastProgress.total}
+                        </div>
+                        <div className="w-full max-w-xs h-1 bg-indigo-900/50 rounded-full mt-2 overflow-hidden">
+                          <motion.div 
+                            className="h-full bg-white"
+                            initial={{ width: 0 }}
+                            animate={{ width: `${(podcastProgress.current / podcastProgress.total) * 100}%` }}
+                          />
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <Radio className="w-6 h-6" />
+                        Generate Full Episode
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {podcastAudioUrl && (
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.95 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    className="mt-8 p-6 bg-slate-900 rounded-3xl text-white flex items-center justify-between shadow-2xl"
+                  >
+                    <div className="flex items-center gap-4">
+                      <div className="w-12 h-12 rounded-full bg-indigo-500 flex items-center justify-center">
+                        <Radio className="w-6 h-6 text-white" />
+                      </div>
+                      <div>
+                        <h4 className="font-bold">Podcast Ready</h4>
+                        <p className="text-xs text-slate-400">Full episode generated</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <audio src={podcastAudioUrl} controls className="h-10 w-48 sm:w-64" />
+                      <button
+                        onClick={() => {
+                          const a = document.createElement('a');
+                          a.href = podcastAudioUrl;
+                          a.download = `podcast-${Date.now()}.wav`;
+                          a.click();
+                        }}
+                        className="p-3 rounded-xl bg-white text-slate-900 hover:bg-slate-100 transition-all shadow-lg"
+                      >
+                        <Download className="w-5 h-5" />
+                      </button>
+                    </div>
+                  </motion.div>
+                )}
+              </motion.div>
+            )}
+
+            {/* Audio Player (Studio Only) */}
             <AnimatePresence>
-              {audioUrl && (
+              {activeTab === 'studio' && audioUrl && (
                 <motion.div
                   initial={{ opacity: 0, scale: 0.95 }}
                   animate={{ opacity: 1, scale: 1 }}
@@ -440,19 +663,20 @@ export default function App() {
                             <p className="text-[10px] text-slate-400 uppercase tracking-tighter">Profile Active</p>
                           </div>
                         </div>
-                        <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <div className="flex items-center gap-2">
                           <button 
                             onClick={() => {
                               const audio = new Audio(voice.sample_path);
                               audio.play();
                             }}
-                            className="p-2 rounded-lg hover:bg-white text-slate-400 hover:text-indigo-600 transition-colors"
+                            className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white text-indigo-600 font-bold text-xs shadow-sm hover:bg-indigo-50 transition-all border border-indigo-100"
                           >
-                            <Play className="w-4 h-4" />
+                            <Play className="w-3 h-3 fill-current" />
+                            Sample
                           </button>
                           <button 
                             onClick={() => deleteClonedVoice(voice.id)}
-                            className="p-2 rounded-lg hover:bg-white text-slate-400 hover:text-red-600 transition-colors"
+                            className="p-2 rounded-xl hover:bg-white text-slate-400 hover:text-red-600 transition-colors"
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>
